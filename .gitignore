@@ -1,0 +1,35 @@
+# OS-specific junk
+.DS_Store
+Thumbs.db
+
+# IDE/editor settings
+.vscode/
+.idea/
+*.iml
+*.swp
+
+# Build / package outputs
+*.log
+*.tmp
+*.bak
+
+# Node / Python (if you later add tooling or scripts)
+node_modules/
+__pycache__/
+*.pyc
+
+# Environment & credentials
+.env
+*.key
+*.pem
+*.crt
+
+# Salesforce-specific
+.sfdx/
+*.scratch-def.json
+*.org-config.json
+
+# VS Code Salesforce extensions sometimes generate this
+.project
+.classpath
+.settings/
