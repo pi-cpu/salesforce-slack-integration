@@ -1,34 +1,18 @@
 trigger OpportunityTrigger on Opportunity (after insert, after update) {
-    // 変更検知（フェーズ or 金額）
-    List<Id> changedIds = new List<Id>();
-    for (Opportunity n : Trigger.new) {
-        Opportunity o = Trigger.isUpdate ? Trigger.oldMap.get(n.Id) : null;
-
-        Boolean stageChanged = Trigger.isInsert
-            ? (n.StageName != null)
-            : (n.StageName != o.StageName);
-
-        Boolean amountChanged = Trigger.isInsert
-            ? (n.Amount != null)
-            : ((n.Amount == null && o.Amount != null)
-               || (n.Amount != null && o.Amount == null)
-               || (n.Amount != null && o.Amount != null && n.Amount != o.Amount));
-
-        if (stageChanged || amountChanged) {
-            changedIds.add(n.Id);
+    // 対象IDを集める（フェーズ変更 or 金額変更）
+    Set<Id> changed = new Set<Id>();
+    if (Trigger.isUpdate) {
+        for (Opportunity newOpp : Trigger.new) {
+            Opportunity oldOpp = Trigger.oldMap.get(newOpp.Id);
+            if (newOpp.StageName != oldOpp.StageName || newOpp.Amount != oldOpp.Amount) {
+                changed.add(newOpp.Id);
+            }
         }
+    } else if (Trigger.isInsert) {
+        for (Opportunity opp : Trigger.new) changed.add(opp.Id);
     }
-    if (changedIds.isEmpty()) return;
+    if (changed.isEmpty()) return;
 
-    // N+1回避：関連を含め一括SOQL
-    List<Opportunity> opps = [
-        SELECT Id, Name, StageName, Amount,
-               AccountId, Account.Name,
-               OwnerId, Owner.Name
-        FROM Opportunity
-        WHERE Id IN :changedIds
-    ];
-
-    // 判定や送信はハンドラ側（CMDTを読むので）
-    SlackNotificationHandler.enqueueOpps(opps);
+    // Queueable を1回だけ起動（バルク安全）
+    System.enqueueJob(new SlackNotificationHandler.QueueJob(new List<Id>(changed)));
 }

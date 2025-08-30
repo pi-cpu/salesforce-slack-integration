@@ -1,99 +1,121 @@
 public with sharing class SlackNotificationHandler implements Queueable, Database.AllowsCallouts {
-    private final List<Opportunity> opps;
 
-    public SlackNotificationHandler(List<Opportunity> opps) {
-        // 深いコピーで防御（関連含む）
-        this.opps = (opps == null) ? new List<Opportunity>() : opps.deepClone(true, true, true);
+    // Queueableに渡す軽量DTO
+    public class QueueJob implements Queueable {
+        private List<Id> oppIds;
+        public QueueJob(List<Id> oppIds) { this.oppIds = oppIds; }
+        public void execute(QueueableContext qc) {
+            SlackNotificationHandler.postOpportunities(oppIds);
+        }
     }
 
-    /** トリガからの入口（1トランザクション=1ジョブ） */
-    public static void enqueueOpps(List<Opportunity> opps) {
-        if (opps == null || opps.isEmpty()) return;
-        System.enqueueJob(new SlackNotificationHandler(opps));
-    }
+    // 公開API：商談IDの束をBlock Kitでまとめて送る
+    public static void postOpportunities(List<Id> oppIds) {
+        if (oppIds == null || oppIds.isEmpty()) return;
 
-    /** 既存の単発API互換（必要なら残す） */
-    public static void sendToSlack(String message) {
-        if (String.isBlank(message)) return;
-        Opportunity dummy = new Opportunity(Name=message);
-        System.enqueueJob(new SlackNotificationHandler(new List<Opportunity>{ dummy }));
-    }
-
-    public void execute(QueueableContext qc) {
-        // CMDTから設定をロード（なければ安全なデフォルト）
+        // 設定（CMDT）を読み込み
         SlackConfigProvider.Conf conf = SlackConfigProvider.load();
+        if (conf == null || conf.enabled == false) return;
 
-        if (!conf.enabled) return;
+        // 関連を一括取得（Account/Owner）
+        List<Opportunity> opps = [
+            SELECT Id, Name, Amount, StageName, Probability, Account.Name, Owner.Name, LastModifiedDate
+            FROM Opportunity
+            WHERE Id IN :oppIds
+            ORDER BY LastModifiedDate DESC
+            LIMIT 50
+        ];
 
-        // Block Kit の blocks を構築（設定に合致した商談のみ）
-        List<Object> blocks = new List<Object>();
-
-        // 見出し（任意）
-        blocks.add(new Map<String, Object>{
-            'type' => 'header',
-            'text' => new Map<String, Object>{
-                'type' => 'plain_text',
-                'text' => 'Opportunity Updates'
-            }
-        });
-
+        // 閾値・対象ステージでフィルタ
+        List<Opportunity> filtered = new List<Opportunity>();
         for (Opportunity o : opps) {
-            // 条件：ステージ OR 金額（設定未指定の条件はスキップ扱い）
-            Boolean stageOk  = conf.targetStages.isEmpty() ? false
-                               : (o.StageName != null && conf.targetStages.contains(o.StageName));
-            Boolean amountOk = (conf.minAmount == null) ? false
-                               : (o.Amount != null && o.Amount >= conf.minAmount);
+            Boolean stageOk = (conf.targetStages.isEmpty() || conf.targetStages.contains(o.StageName));
+            Boolean amountOk = (conf.minAmount == null || (o.Amount != null && o.Amount >= conf.minAmount));
+            if (stageOk && amountOk) filtered.add(o);
+        }
+        if (filtered.isEmpty()) return;
 
-            if (!(stageOk || amountOk)) continue;
+        // Block Kitのblocksを構築
+        List<Object> blocks = new List<Object>();
+        blocks.add(sectionText('*商談更新* :bell:（まとめ通知）'));
+        blocks.add(divider());
 
-            String acct  = (o.Account != null) ? o.Account.Name : '（取引先なし）';
-            String owner = (o.Owner   != null) ? o.Owner.Name   : '（担当不明）';
-            String amt   = (o.Amount  != null) ? String.valueOf(o.Amount.setScale(0)) : '—';
-            String stage = (o.StageName != null) ? o.StageName : '—';
-
-            // 1商談=1セクション
-            blocks.add(new Map<String, Object>{
+        for (Opportunity o : filtered) {
+            // 行をfieldsで2列×2段みたいに見せる
+            List<Object> fields = new List<Object>{
+                mrkdwnField('*顧客:* ' + nvl(o.Account != null ? o.Account.Name : null, '-')),
+                mrkdwnField('*担当:* ' + nvl(o.Owner  != null ? o.Owner.Name  : null, '-')),
+                mrkdwnField('*フェーズ:* ' + nvl(o.StageName, '-') + ' (' + (o.Probability==null? '—' : String.valueOf(o.Probability.intValue()) + '%') + ')'),
+                mrkdwnField('*金額:* ' + formatJPY(o.Amount))
+            };
+            blocks.add(new Map<String,Object>{
                 'type' => 'section',
-                'text' => new Map<String, Object>{
-                    'type' => 'mrkdwn',
-                    'text' => '*' + o.Name + '*\n' +
-                              '顧客: ' + acct + ' | フェーズ: ' + stage + ' | 金額: ' + amt + ' | 担当: ' + owner
+                'text' => new Map<String,Object>{ 'type' => 'mrkdwn', 'text' => '*' + nvl(o.Name,'(名称なし)') + '*' },
+                'fields' => fields
+            });
+            // レコードの詳細へ飛ぶボタン
+            blocks.add(new Map<String,Object>{
+                'type' => 'actions',
+                'elements' => new List<Object>{
+                    new Map<String,Object>{
+                        'type' => 'button',
+                        'text' => new Map<String,Object>{ 'type' => 'plain_text', 'text' => 'Salesforceで開く' },
+                        'url'  => recordUrl(o.Id)
+                    }
                 }
             });
-
-            // 仕切り線（任意）
-            blocks.add(new Map<String, Object>{ 'type' => 'divider' });
+            blocks.add(divider());
         }
 
-        // 送るものが無ければ終了
-        if (blocks.size() <= 2) return; // header + dividerのみ等は送らない
-
-        Map<String, Object> payload = new Map<String, Object>{
-            'text'   => 'Opportunity Updates',
+        // リクエストボディ（Block Kitを使うときは text は任意）
+        Map<String,Object> payload = new Map<String,Object>{
             'blocks' => blocks
         };
-
-        HttpRequest req = new HttpRequest();
-        req.setEndpoint('callout:Slack_Webhook');                 // Named Credential でURL/認証を外出し
-        req.setMethod('POST');
-        req.setHeader('Content-Type', 'application/json; charset=utf-8');
-        req.setTimeout(5000);
-        req.setBody(JSON.serialize(payload));                     // JSONは必ずserialize
-
-        try {
-            Http http = new Http();
-            HttpResponse res = http.send(req);
-            Integer code = res.getStatusCode();
-            if (code < 200 || code >= 300) {
-                logError('Slack post failed', code + ' ' + res.getBody());
-            }
-        } catch (Exception e) {
-            logError('Slack post exception', e.getMessage());
-        }
+        doPost(JSON.serialize(payload));
     }
 
-    @TestVisible private static void logError(String title, String detail) {
-        System.debug(LoggingLevel.ERROR, title + ' :: ' + detail);
-        // 将来: Integration_Log__c に保存 or Platform Event へ
+    // ========== Slack Block Kit ヘルパ ==========
+
+    private static Map<String,Object> divider() {
+        return new Map<String,Object>{ 'type' => 'divider' };
+    }
+    private static Map<String,Object> sectionText(String md) {
+        return new Map<String,Object>{
+            'type' => 'section',
+            'text' => new Map<String,Object>{ 'type' => 'mrkdwn', 'text' => md }
+        };
+    }
+    private static Map<String,Object> mrkdwnField(String md) {
+        return new Map<String,Object>{ 'type' => 'mrkdwn', 'text' => md };
+    }
+
+    // 金額を「¥1,234,567」風に
+    private static String formatJPY(Decimal amt) {
+        if (amt == null) return '—';
+        return '¥' + amt.setScale(0).format(); // 組織のロケールに依存
+    }
+
+    // レコードへのURL（My Domain/Lightning対応）
+    private static String recordUrl(Id recId) {
+        String base = URL.getSalesforceBaseUrl().toExternalForm();
+        // Lightning 直リンク
+        return base + '/lightning/r/Opportunity/' + recId + '/view';
+    }
+
+    // ========== HTTP送信 ==========
+
+    @TestVisible private static void doPost(String body) {
+        HttpRequest req = new HttpRequest();
+        req.setEndpoint('callout:Slack_Webhook'); // Named Credential
+        req.setMethod('POST');
+        req.setHeader('Content-Type', 'application/json; charset=utf-8');
+        req.setBody(body);
+
+        Http http = new Http();
+        HttpResponse res = http.send(req);
+        if (res.getStatusCode() < 200 || res.getStatusCode() >= 300) {
+            System.debug(LoggingLevel.ERROR,
+                'Slack POST failed status=' + res.getStatus() + ' body=' + res.getBody());
+        }
     }
 }
