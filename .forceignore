@@ -33,3 +33,7 @@ __pycache__/
 .project
 .classpath
 .settings/
+
+**/jsconfig.json
+
+**/.eslintrc.json
