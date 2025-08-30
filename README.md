@@ -41,6 +41,7 @@ Salesforce の商談進捗をトリガーにして **Slack へ通知を送信す
 ---
 
 ## アーキテクチャ
+
 ```mermaid
 flowchart LR
     A[Salesforce Opportunity Update] --> B[Apex Trigger]
