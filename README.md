@@ -97,3 +97,56 @@ flowchart LR
 ## スクリーンショット（例）
 
 <!-- 後で追加予定 -->
+
+## 設計 (Architecture & Design)
+
+### 目的（非機能要件）
+- **バルク安全**：複数レコード更新でも Governor Limit に掛からない
+- **責務分離**：Trigger は検知・抽出のみ、処理は Handler（Queueable）へ委譲
+- **運用容易**：閾値/対象ステージは **Custom Metadata**（CMDT）でノーコード設定
+- **セキュア**：Webhook URL は **Named Credential** に外出し（コードに秘匿情報を持たない）
+- **見やすい通知**：Slack **Block Kit** で可読性の高いメッセージ
+
+---
+
+### モジュール構成
+- **`OpportunityTrigger.trigger`**
+  - after insert / after update で変更検知（フェーズ or 金額）
+  - 関連（Account, Owner）を **一括SOQL** で取得
+  - 通知メッセージの素材を作り、**1回だけ Queueable** を enqueue
+
+- **`SlackNotificationHandler.cls`**
+  - `Queueable, AllowsCallouts` で **非同期 Callout**
+  - **Named Credential**（`callout:Slack_Webhook`）へ POST
+  - JSON は `JSON.serialize` で安全生成
+  - Slack **Block Kit** の `blocks` を構築し、**複数商談を1リクエスト**で送信
+  - 失敗時は `System.debug(ERROR)`（将来はログ用オブジェクト/Platform Eventへ）
+
+- **`SlackConfigProvider.cls`**
+  - **CMDT (`Slack_Config__mdt`)** から設定を読込
+    - `Enabled__c`（ON/OFF）
+    - `MinAmount__c`（通知する金額の下限）
+    - `TargetStages__c`（カンマ区切りの対象ステージ）
+  - CMDT が未設定でも動く **安全デフォルト** を保持
+
+---
+
+### 処理フロー
+```mermaid
+sequenceDiagram
+  participant SF as Salesforce
+  participant Trg as OpportunityTrigger
+  participant Q as SlackNotificationHandler(Queueable)
+  participant Slack as Slack Webhook
+
+  SF->>Trg: after insert/update (Opportunity)
+  Trg->>Trg: フェーズ/金額の変更検知、対象IDを収集
+  Trg->>Trg: 1回のSOQLで関連(Account/Owner)を取得
+  Trg->>Q: enqueueOpps(opps)（1トランザクション＝1ジョブ）
+  activate Q
+  Q->>Q: CMDT 読込（閾値/対象ステージ/有効フラグ）
+  Q->>Q: Block Kit blocks を組み立て
+  Q->>Slack: POST (Named Credential: callout:Slack_Webhook)
+  Slack-->>Q: 200 / エラー
+  Q->>Q: エラーなら監査ログ出力
+  deactivate Q
