@@ -24,11 +24,6 @@ __pycache__/
 *.pem
 *.crt
 
-# Salesforce-specific
-.sfdx/
-*.scratch-def.json
-*.org-config.json
-
 # VS Code Salesforce extensions sometimes generate this
 .project
 .classpath
