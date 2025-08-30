@@ -1,4 +1,4 @@
-public with sharing class SlackNotificationHandler implements Queueable, Database.AllowsCallouts {
+public with sharing class SlackNotificationHandler implements Database.AllowsCallouts {
 
     // Queueableに渡す軽量DTO
     public class QueueJob implements Queueable {
