@@ -49,3 +49,51 @@ flowchart LR
     C --> D[Slack Webhook]
     D --> E[Slack Channel]
 ```
+---
+
+## クイックスタート
+
+1. **SlackでWebhookを発行**
+   - ワークスペース設定から「Incoming Webhook」を有効化し、通知先チャンネルを指定してURLを控える。  
+
+2. **環境変数を設定**
+   - リポジトリ直下に `.env` を作成し、以下の内容を記述：
+     ```dotenv
+     SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxxx/yyyy/zzzz
+     ```
+
+3. **SalesforceにApexコードをデプロイ**
+   - `SlackNotificationHandler.cls` とトリガファイルをアップロード。  
+
+4. **動作確認**
+   - 商談ステージを変更してSlackに通知が届くことを確認。  
+
+---
+
+## 環境変数とセキュリティ
+
+- 本番用のWebhook URLは `.env` に記述し、`.gitignore` によりリポジトリには含めない。  
+- 代わりに `.env.example` を配布用として用意。  
+- Push Protection / Secret Scanning を有効化し、誤コミットを防止。  
+
+---
+
+## 拡張案
+
+- **他ツールへの展開**  
+  - Teams / Discord / Google Chat など、Webhook対応サービスへ拡張可能。  
+
+- **通知内容のテンプレート化**  
+  - JSON構造をメタデータ化し、管理者がGUIで編集できるように。  
+
+- **キューイング処理**  
+  - Platform Eventsやキューを利用して、大量通知時の負荷を軽減。  
+
+- **権限設定**  
+  - 特定のプロファイル/ロールのみ通知を許可する制御。  
+
+---
+
+## スクリーンショット（例）
+
+<!-- 後で追加予定 -->
