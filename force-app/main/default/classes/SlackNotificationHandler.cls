@@ -1,4 +1,4 @@
-public with sharing class SlackNotificationHandler implements Database.AllowsCallouts {
+public with sharing class SlackNotificationHandler {
 
     // Queueableに渡す軽量DTO
     public class QueueJob implements Queueable {
@@ -7,6 +7,11 @@ public with sharing class SlackNotificationHandler implements Database.AllowsCal
         public void execute(QueueableContext qc) {
             SlackNotificationHandler.postOpportunities(oppIds);
         }
+    }
+
+    // 文字列がnull/空白なら代替値を返す
+    private static String nvl(String val, String alt) {
+        return String.isBlank(val) ? alt : val;
     }
 
     // 公開API：商談IDの束をBlock Kitでまとめて送る
@@ -39,6 +44,9 @@ public with sharing class SlackNotificationHandler implements Database.AllowsCal
         List<Object> blocks = new List<Object>();
         blocks.add(sectionText('*商談更新* :bell:（まとめ通知）'));
         blocks.add(divider());
+
+        
+
 
         for (Opportunity o : filtered) {
             // 行をfieldsで2列×2段みたいに見せる
@@ -97,7 +105,7 @@ public with sharing class SlackNotificationHandler implements Database.AllowsCal
 
     // レコードへのURL（My Domain/Lightning対応）
     private static String recordUrl(Id recId) {
-        String base = URL.getSalesforceBaseUrl().toExternalForm();
+        String base = URL.getOrgDomainUrl().toExternalForm();
         // Lightning 直リンク
         return base + '/lightning/r/Opportunity/' + recId + '/view';
     }
